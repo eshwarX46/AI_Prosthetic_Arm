@@ -1,0 +1,665 @@
+#include <SoftwareSerial.h>
+#include "VoiceRecognitionV3.h"
+#include <Servo.h>
+#include <LiquidCrystal.h>
+#include <Wire.h>
+
+VR myVR(2,3);
+LiquidCrystal lcd(11, 12, 5, 9, 7, 8);
+
+uint8_t records[7];
+uint8_t buf[64];
+
+Servo thumb, index, middle, ring, pinky, elbowUD, elbowLR;
+
+#define THUMB_PIN      4
+#define INDEX_PIN      13
+#define MIDDLE_PIN     A0
+#define RING_PIN       A1
+#define PINKY_PIN      A2
+#define ELBOW_UD_PIN   A3
+#define ELBOW_LR_PIN   6
+
+#define THUMB_OPEN     90
+#define THUMB_CLOSED   0
+#define INDEX_OPEN     180
+#define INDEX_CLOSED   0
+#define MIDDLE_OPEN    0
+#define MIDDLE_CLOSED  180
+#define RING_OPEN      180
+#define RING_CLOSED    0
+#define PINKY_OPEN     180
+#define PINKY_CLOSED   0
+
+#define ELBOW_CENTER   90
+#define ELBOW_MOVE_RANGE 30
+
+#define TRIG_PIN       9
+#define ECHO_PIN       10
+
+#define ADXL345_ADDRESS 0x53
+
+// ========== ULTRASONIC MODE SWITCHING ==========
+bool waitingForHandRemoval = false;
+unsigned long handDetectedTime = 0;
+#define HAND_DETECT_DELAY 2000
+#define HAND_RELEASE_DELAY 1000
+// ===============================================
+
+float xg, yg, zg;
+float x_offset = 0, y_offset = 0, z_offset = 0;
+
+int currentMode = 0;
+String modeNames[] = {"VOICE", "GESTURE", "GYRO", "MIND"};
+bool handOpen = false;
+
+byte gestureIndex = 0;
+byte totalGestures = 6;
+unsigned long lastDetection = 0;
+#define DETECTION_COOLDOWN 3000
+#define ULTRASONIC_DISTANCE 20
+
+String currentMovement = "CENTER";
+bool movementActive = false;
+
+unsigned long lastMindCommand = 0;
+#define MIND_COOLDOWN 3000
+
+#define HAND_TOGGLE    0
+#define SHIFT_MODE     1
+#define THUMB_FINGER   2
+#define INDEX_FINGER   3  
+#define MIDDLE_FINGER  4
+#define RING_FINGER    5
+#define SMALL_FINGER   6
+
+// ========== ESP32-CAM GESTURE RECEPTION ==========
+String receivedCommand = "";
+// =================================================
+
+void setup()
+{
+  myVR.begin(9600);
+  Serial.begin(115200);  // Communication with Uno (EEG)
+  
+  lcd.begin(16, 2);
+  lcd.print("NeuroLimb Ready");
+  lcd.setCursor(0, 1);
+  lcd.print("Mode: VOICE");
+  
+  initializeServos();
+  initializeSensors();
+  
+  if(myVR.clear() == 0){
+    loadAllCommands();
+  }
+  
+  updateDisplay();
+  Serial.println("==========================================");
+  Serial.println("   NEUROLIMB CONTROL SYSTEM READY");
+  Serial.println("==========================================");
+  Serial.println("🎤 VOICE Mode - Say commands");
+  Serial.println("✋ GESTURE Mode - Wave hand near sensor");
+  Serial.println("📐 GYRO Mode - Tilt your wrist");
+  Serial.println("🧠 MIND Mode - Focus your thoughts (8 patterns)");
+  Serial.println("==========================================");
+}
+
+void initializeServos()
+{
+  thumb.attach(THUMB_PIN);
+  index.attach(INDEX_PIN);
+  middle.attach(MIDDLE_PIN);
+  ring.attach(RING_PIN);
+  pinky.attach(PINKY_PIN);
+  elbowUD.attach(ELBOW_UD_PIN);
+  elbowLR.attach(ELBOW_LR_PIN);
+  
+  openAllFingers();
+  centerElbow();
+  handOpen = true;
+  
+  Serial.println("✅ Servos initialized");
+}
+
+void initializeSensors()
+{
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  Serial.println("✅ Ultrasonic ready");
+  
+  Wire.begin();
+  if(initializeADXL345()){
+    calibrateGyro();
+  }
+}
+
+bool initializeADXL345()
+{
+  Wire.beginTransmission(ADXL345_ADDRESS);
+  if(Wire.endTransmission() == 0){
+    writeRegister(ADXL345_ADDRESS, 0x2D, 0x00);
+    delay(10);
+    writeRegister(ADXL345_ADDRESS, 0x2D, 0x08);
+    writeRegister(ADXL345_ADDRESS, 0x31, 0x0B);
+    Serial.println("✅ GYRO: Initialized");
+    return true;
+  }
+  Serial.println("⚠️ GYRO: Not Found");
+  return false;
+}
+
+void writeRegister(byte address, byte reg, byte value)
+{
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission();
+}
+
+byte readRegister(byte address, byte reg)
+{
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.endTransmission();
+  Wire.requestFrom(address, (byte)1);
+  return Wire.read();
+}
+
+void calibrateGyro()
+{
+  float sumX = 0, sumY = 0, sumZ = 0;
+  for(int i=0; i<50; i++){
+    readGyro();
+    sumX += xg;
+    sumY += yg;
+    sumZ += zg;
+    delay(20);
+  }
+  x_offset = sumX / 50;
+  y_offset = sumY / 50;
+  z_offset = (sumZ / 50) - 1.0;
+}
+
+void readGyro()
+{
+  Wire.beginTransmission(ADXL345_ADDRESS);
+  Wire.write(0x32);
+  Wire.endTransmission();
+  Wire.requestFrom(ADXL345_ADDRESS, 6);
+  
+  int16_t x = (Wire.read() | (Wire.read() << 8));
+  int16_t y = (Wire.read() | (Wire.read() << 8)); 
+  int16_t z = (Wire.read() | (Wire.read() << 8));
+  
+  xg = (x / 256.0) - x_offset;
+  yg = (y / 256.0) - y_offset;
+  zg = (z / 256.0) - z_offset;
+}
+
+void loadAllCommands()
+{
+  for(int i=0; i<7; i++){
+    if(myVR.load((uint8_t)i) >= 0){
+      delay(3000);
+    }
+  }
+  Serial.println("✅ Voice commands loaded");
+}
+
+void loop()
+{
+  int ret = myVR.recognize(buf, 50);
+  if(ret>0){
+    processCommand(buf[1]);
+  }
+  
+  // ===== CHECK MIND COMMANDS FROM UNO =====
+  checkMindCommands();
+  // ========================================
+  
+  // ===== CHECK ESP32-CAM GESTURE COMMANDS =====
+  checkESP32Commands();
+  // ============================================
+  
+  // ===== ULTRASONIC MODE SWITCHING =====
+  long distance = readUltrasonic();
+  bool handPresent = (distance > 0 && distance < ULTRASONIC_DISTANCE);
+  
+  if (handPresent && !waitingForHandRemoval) {
+    handDetectedTime = millis();
+    waitingForHandRemoval = true;
+  }
+  
+  if (waitingForHandRemoval && handPresent && (millis() - handDetectedTime > HAND_DETECT_DELAY)) {
+    changeMode();
+    waitingForHandRemoval = false;
+    delay(HAND_RELEASE_DELAY);
+  }
+  
+  if (waitingForHandRemoval && !handPresent) {
+    waitingForHandRemoval = false;
+  }
+  // ======================================
+  
+  runModeOperations();
+  
+  delay(50);
+}
+
+// ========== MIND COMMAND RECEIVER FROM UNO ==========
+void checkMindCommands() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    
+    if (cmd.length() > 0 && cmd.startsWith("MIND_PATTERN_")) {
+      // Extract pattern number
+      int patternNum = cmd.substring(13).toInt();
+      
+      if (currentMode == 3) {  // Only in MIND mode
+        if (millis() - lastMindCommand > MIND_COOLDOWN) {
+          Serial.print("🧠 Mind Pattern Received: ");
+          Serial.println(patternNum);
+          executeMindPattern(patternNum);
+          lastMindCommand = millis();
+        }
+      }
+    }
+  }
+}
+
+void executeMindPattern(int pattern) {
+  Serial.print("🎯 Executing Mind Pattern ");
+  Serial.println(pattern);
+  
+  lcd.clear();
+  lcd.print("MIND Pattern ");
+  lcd.print(pattern);
+  
+  openAllFingers();
+  delay(300);
+  
+  switch(pattern) {
+    case 0:
+      thumb.write(THUMB_CLOSED);
+      index.write(INDEX_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("THUMB+INDEX");
+      Serial.println("   ▶️ Thumb + Index");
+      break;
+    case 1:
+      middle.write(MIDDLE_CLOSED);
+      ring.write(RING_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("MIDDLE+RING");
+      Serial.println("   ▶️ Middle + Ring");
+      break;
+    case 2:
+      pinky.write(PINKY_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("SMALL ONLY");
+      Serial.println("   ▶️ Pinky");
+      break;
+    case 3:
+      thumb.write(THUMB_CLOSED);
+      middle.write(MIDDLE_CLOSED);
+      pinky.write(PINKY_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("TH+MID+SMALL");
+      Serial.println("   ▶️ Thumb + Middle + Pinky");
+      break;
+    case 4:
+      index.write(INDEX_CLOSED);
+      ring.write(RING_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("INDEX+RING");
+      Serial.println("   ▶️ Index + Ring");
+      break;
+    case 5:
+      index.write(INDEX_CLOSED);
+      middle.write(MIDDLE_CLOSED);
+      ring.write(RING_CLOSED);
+      pinky.write(PINKY_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("ALL EXC THUMB");
+      Serial.println("   ▶️ All except thumb");
+      break;
+    case 6:
+      thumb.write(THUMB_CLOSED);
+      index.write(INDEX_CLOSED);
+      middle.write(MIDDLE_CLOSED);
+      ring.write(RING_CLOSED);
+      lcd.setCursor(0, 1);
+      lcd.print("ALL EXC SMALL");
+      Serial.println("   ▶️ All except pinky");
+      break;
+    case 7:
+      closeAllFingers();
+      lcd.setCursor(0, 1);
+      lcd.print("ALL FINGERS");
+      Serial.println("   ▶️ All fingers");
+      break;
+    default:
+      Serial.println("   ⚠️ Unknown pattern");
+      return;
+  }
+  
+  delay(2000);
+  openAllFingers();
+  
+  lcd.clear();
+  lcd.print("Mind Ready!");
+  lcd.setCursor(0, 1);
+  lcd.print("Focus to control");
+  Serial.println("   ▶️ Returned to open position");
+}
+// ================================================
+
+// ========== ESP32-CAM COMMAND RECEIVER ==========
+void checkESP32Commands() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    
+    if (cmd.length() > 0 && !cmd.startsWith("MIND_PATTERN_")) {
+      Serial.print("📥 Received from ESP32-CAM: ");
+      Serial.println(cmd);
+      
+      if (cmd == "G0" && currentMode == 1) executeGesture(0);
+      else if (cmd == "G1" && currentMode == 1) executeGesture(1);
+      else if (cmd == "G2" && currentMode == 1) executeGesture(2);
+      else if (cmd == "G3" && currentMode == 1) executeGesture(3);
+      else if (cmd == "G4" && currentMode == 1) executeGesture(4);
+      else if (cmd == "G5" && currentMode == 1) executeGesture(5);
+      else if (cmd == "MODE") changeMode();
+    }
+  }
+}
+// =================================================
+
+void processCommand(uint8_t cmd)
+{
+  if(cmd == SHIFT_MODE) {
+    changeMode();
+    return;
+  }
+  
+  if(currentMode != 0) {
+    lcd.clear();
+    lcd.print("Switch to VOICE");
+    lcd.setCursor(0, 1);
+    lcd.print("for commands");
+    delay(1500);
+    updateDisplay();
+    return;
+  }
+  
+  switch(cmd){
+    case HAND_TOGGLE:
+      toggleHand();
+      break;
+    case THUMB_FINGER:
+      toggleFinger(1);
+      break;
+    case INDEX_FINGER:
+      toggleFinger(2);
+      break;
+    case MIDDLE_FINGER:
+      toggleFinger(3);
+      break;
+    case RING_FINGER:
+      toggleFinger(4);
+      break;
+    case SMALL_FINGER:
+      toggleFinger(5);
+      break;
+  }
+}
+
+void runModeOperations() {
+  switch(currentMode) {
+    case 0: break;
+    case 1: gestureModeOperation(); break;
+    case 2: gyroModeOperation(); break;
+    case 3: mindModeDisplay(); break;
+  }
+}
+
+void mindModeDisplay() {
+  lcd.clear();
+  lcd.print("Mode: MIND");
+  lcd.setCursor(0, 1);
+  lcd.print("Focus to control");
+}
+
+void gestureModeOperation() {
+    long distance = readUltrasonic();
+    
+    if (distance > 0 && distance < ULTRASONIC_DISTANCE && !waitingForHandRemoval) {
+        if (millis() - lastDetection > DETECTION_COOLDOWN) {
+            Serial.print("✋ HAND DETECTED! Gesture: ");
+            Serial.println(gestureIndex);
+            
+            executeGesture(gestureIndex);
+            
+            gestureIndex = (gestureIndex + 1) % totalGestures;
+            lastDetection = millis();
+            delay(1000);
+        }
+    }
+    
+    static unsigned long lastDisplay = 0;
+    if (millis() - lastDisplay > 2000) {
+        lcd.clear();
+        lcd.print("Mode: GESTURE");
+        lcd.setCursor(0, 1);
+        lcd.print("Wave hand near");
+        lastDisplay = millis();
+    }
+    
+    delay(100);
+}
+
+long readUltrasonic() {
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+    
+    long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+    if (duration == 0) return -1;
+    return duration * 0.034 / 2;
+}
+
+void executeGesture(byte gesture) {
+    switch(gesture) {
+        case 0:
+            thumb.write(THUMB_CLOSED);
+            delay(800);
+            thumb.write(THUMB_OPEN);
+            delay(800);
+            break;
+        case 1:
+            index.write(INDEX_CLOSED);
+            delay(800);
+            index.write(INDEX_OPEN);
+            delay(800);
+            break;
+        case 2:
+            middle.write(MIDDLE_CLOSED);
+            delay(800);
+            middle.write(MIDDLE_OPEN);
+            delay(800);
+            break;
+        case 3:
+            ring.write(RING_CLOSED);
+            delay(800);
+            ring.write(RING_OPEN);
+            delay(800);
+            break;
+        case 4:
+            pinky.write(PINKY_CLOSED);
+            delay(800);
+            pinky.write(PINKY_OPEN);
+            delay(800);
+            break;
+        case 5:
+            closeAllFingers();
+            delay(1000);
+            openAllFingers();
+            delay(1000);
+            break;
+    }
+}
+
+void gyroModeOperation() {
+  readGyro();
+  
+  float tiltX = atan2(xg, sqrt(yg*yg + zg*zg)) * 180.0 / PI;
+  float tiltY = atan2(yg, sqrt(xg*xg + zg*zg)) * 180.0 / PI;
+  
+  String newMovement = "CENTER";
+  
+  if(abs(tiltX) < 15 && abs(tiltY) < 15) {
+    newMovement = "CENTER";
+    movementActive = false;
+  } else {
+    if(abs(tiltY) > abs(tiltX)) {
+      if(tiltY > 20) newMovement = "DOWN";
+      else if(tiltY < -20) newMovement = "UP";
+    } else {
+      if(tiltX > 20) newMovement = "RIGHT";
+      else if(tiltX < -20) newMovement = "LEFT";
+    }
+    movementActive = true;
+  }
+  
+  if(newMovement != currentMovement) {
+    currentMovement = newMovement;
+    moveElbow(currentMovement);
+  }
+  
+  static unsigned long lastGyroDisplay = 0;
+  if (millis() - lastGyroDisplay > 500) {
+    lcd.clear();
+    lcd.print("Mode: GYRO");
+    lcd.setCursor(0, 1);
+    lcd.print(currentMovement);
+    lastGyroDisplay = millis();
+  }
+}
+
+void moveElbow(String direction) {
+  if(direction == "CENTER") {
+    elbowUD.write(ELBOW_CENTER);
+    elbowLR.write(ELBOW_CENTER);
+  } 
+  else if(direction == "UP") {
+    elbowUD.write(ELBOW_CENTER + ELBOW_MOVE_RANGE);
+    elbowLR.write(ELBOW_CENTER);
+  }
+  else if(direction == "DOWN") {
+    elbowUD.write(ELBOW_CENTER - ELBOW_MOVE_RANGE);
+    elbowLR.write(ELBOW_CENTER);
+  }
+  else if(direction == "LEFT") {
+    elbowLR.write(ELBOW_CENTER - ELBOW_MOVE_RANGE);
+    elbowUD.write(ELBOW_CENTER);
+  }
+  else if(direction == "RIGHT") {
+    elbowLR.write(ELBOW_CENTER + ELBOW_MOVE_RANGE);
+    elbowUD.write(ELBOW_CENTER);
+  }
+}
+
+void centerElbow() {
+  elbowUD.write(ELBOW_CENTER);
+  elbowLR.write(ELBOW_CENTER);
+}
+
+void changeMode() {
+  currentMode = (currentMode + 1) % 4;
+  
+  gestureIndex = 0;
+  currentMovement = "CENTER";
+  centerElbow();
+  
+  Serial.print("Mode Changed to: ");
+  Serial.println(modeNames[currentMode]);
+  
+  updateDisplay();
+  blinkLED();
+}
+
+void updateDisplay() {
+  lcd.clear();
+  lcd.print("Mode: ");
+  lcd.print(modeNames[currentMode]);
+  lcd.setCursor(0, 1);
+  lcd.print("Hand: ");
+  lcd.print(handOpen ? "OPEN" : "CLOSED");
+}
+
+void blinkLED() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  for(int i=0; i<3; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(100);
+  }
+}
+
+void toggleHand() {
+  if(handOpen) {
+    closeAllFingers();
+    handOpen = false;
+  } else {
+    openAllFingers();
+    handOpen = true;
+  }
+  updateDisplay();
+}
+
+void toggleFinger(int finger) {
+  switch(finger) {
+    case 1: 
+      thumb.write(thumb.read() == THUMB_OPEN ? THUMB_CLOSED : THUMB_OPEN);
+      break;
+    case 2:
+      index.write(index.read() == INDEX_OPEN ? INDEX_CLOSED : INDEX_OPEN);
+      break;
+    case 3:
+      middle.write(middle.read() == MIDDLE_OPEN ? MIDDLE_CLOSED : MIDDLE_OPEN);
+      break;
+    case 4:
+      ring.write(ring.read() == RING_OPEN ? RING_CLOSED : RING_OPEN);
+      break;
+    case 5:
+      pinky.write(pinky.read() == PINKY_OPEN ? PINKY_CLOSED : PINKY_OPEN);
+      break;
+  }
+  delay(300);
+}
+
+void openAllFingers() {
+  thumb.write(THUMB_OPEN);
+  index.write(INDEX_OPEN);
+  middle.write(MIDDLE_OPEN);
+  ring.write(RING_OPEN);
+  pinky.write(PINKY_OPEN);
+  handOpen = true;
+}
+
+void closeAllFingers() {
+  thumb.write(THUMB_CLOSED);
+  index.write(INDEX_CLOSED);
+  middle.write(MIDDLE_CLOSED);
+  ring.write(RING_CLOSED);
+  pinky.write(PINKY_CLOSED);
+  handOpen = false;
+}

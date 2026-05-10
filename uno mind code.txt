@@ -1,0 +1,198 @@
+// Arduino Uno - Mind Signal Processor with MULTIPLE PATTERNS
+// BioAmp EXG Pill Mind Control for NeuroLimb
+// Sends different commands based on focus level
+
+#define INPUT_PIN A0        // BioAmp EXG Pill input
+#define SAMPLE_RATE 256     // EEG sampling rate
+
+// Mind control variables
+float signalThreshold = 50.0;
+float signalBaseline = 0;
+bool baselineCalibrated = false;
+unsigned long lastSignal = 0;
+#define MIND_COOLDOWN 3000
+
+// Multi-pattern detection
+float signalStrength = 0;
+int lastSentPattern = -1;
+
+// Pre-trained thresholds for 8 patterns
+// These map to Nano's gesture patterns 0-7
+const float patternThresholds[8] = {
+  60,   // Pattern 0: Very relaxed
+  90,   // Pattern 1: Light focus
+  120,  // Pattern 2: Medium focus
+  150,  // Pattern 3: Good focus
+  180,  // Pattern 4: Strong focus
+  210,  // Pattern 5: Very strong
+  250,  // Pattern 6: Intense focus
+  300   // Pattern 7: Maximum focus
+};
+
+// Signal processing
+float filteredSignal = 0;
+static unsigned long past = 0;
+static long timer = 0;
+
+void setup() {
+  Serial.begin(115200);  // Match Nano's baud rate
+  
+  Serial.println("==========================================");
+  Serial.println("   NEUROLIMB MIND PROCESSOR (ARDUINO UNO)");
+  Serial.println("==========================================");
+  Serial.println("BioAmp EXG Pill Connected to A0");
+  Serial.println("Sending multi-pattern commands to Nano");
+  Serial.println("==========================================");
+  Serial.println("Calibrating baseline - Please relax for 5 seconds...");
+}
+
+void loop() {
+  unsigned long present = micros();
+  unsigned long interval = present - past;
+  past = present;
+  timer -= interval;
+
+  if(timer < 0){
+    timer += 1000000 / SAMPLE_RATE;
+    float sensor_value = analogRead(INPUT_PIN);
+    filteredSignal = EEGFilter(sensor_value);
+    
+    if (!baselineCalibrated) {
+      calibrateBaseline(filteredSignal);
+    } else {
+      checkForMindPattern();
+    }
+  }
+}
+
+void calibrateBaseline(float signal) {
+  static float baselineSum = 0;
+  static int calibrationSamples = 0;
+  
+  if (calibrationSamples < 1280) {
+    baselineSum += abs(signal);
+    calibrationSamples++;
+    
+    if (calibrationSamples % 256 == 0) {
+      Serial.print("Calibrating... ");
+      Serial.print((calibrationSamples * 100) / 1280);
+      Serial.println("%");
+    }
+  } else {
+    signalBaseline = baselineSum / calibrationSamples;
+    signalThreshold = signalBaseline * 2.5;
+    baselineCalibrated = true;
+    
+    Serial.println("==========================================");
+    Serial.println("✅ BASELINE CALIBRATION COMPLETE");
+    Serial.print("   Baseline: ");
+    Serial.println(signalBaseline);
+    Serial.print("   Threshold: ");
+    Serial.println(signalThreshold);
+    Serial.println("==========================================");
+    Serial.println("READY - 8 Mind Patterns Available!");
+    Serial.println("Focus Level -> Pattern:");
+    Serial.println("  Very Relaxed -> Pattern 0 (THUMB+INDEX)");
+    Serial.println("  Light Focus  -> Pattern 1 (MIDDLE+RING)");
+    Serial.println("  Medium Focus -> Pattern 2 (SMALL)");
+    Serial.println("  Good Focus   -> Pattern 3 (TH+MID+SMALL)");
+    Serial.println("  Strong Focus -> Pattern 4 (INDEX+RING)");
+    Serial.println("  Very Strong  -> Pattern 5 (ALL EXC THUMB)");
+    Serial.println("  Intense Focus-> Pattern 6 (ALL EXC SMALL)");
+    Serial.println("  Max Focus    -> Pattern 7 (ALL FINGERS)");
+    Serial.println("==========================================");
+  }
+}
+
+void checkForMindPattern() {
+  signalStrength = abs(filteredSignal - signalBaseline);
+  
+  if (signalStrength > signalThreshold) {
+    if (millis() - lastSignal > MIND_COOLDOWN) {
+      
+      // Determine which pattern based on signal strength
+      int detectedPattern = 0;
+      for (int i = 0; i < 8; i++) {
+        if (signalStrength >= patternThresholds[i]) {
+          detectedPattern = i;
+        }
+      }
+      
+      // Send pattern command to Nano
+      Serial.print("MIND_PATTERN_");
+      Serial.println(detectedPattern);
+      
+      lastSignal = millis();
+      lastSentPattern = detectedPattern;
+      
+      Serial.print("🧠 MIND DETECTED! Pattern: ");
+      Serial.print(detectedPattern);
+      Serial.print(" | Strength: ");
+      Serial.print(signalStrength);
+      Serial.print(" | Focus Level: ");
+      switch(detectedPattern) {
+        case 0: Serial.println("Very Relaxed"); break;
+        case 1: Serial.println("Light Focus"); break;
+        case 2: Serial.println("Medium Focus"); break;
+        case 3: Serial.println("Good Focus"); break;
+        case 4: Serial.println("Strong Focus"); break;
+        case 5: Serial.println("Very Strong"); break;
+        case 6: Serial.println("Intense Focus"); break;
+        case 7: Serial.println("Maximum Focus"); break;
+      }
+    }
+  }
+  
+  // Display status every 3 seconds
+  static unsigned long lastDisplay = 0;
+  if (millis() - lastDisplay > 3000) {
+    Serial.print("📊 Signal Strength: ");
+    Serial.print(signalStrength);
+    Serial.print(" | Active Pattern: ");
+    int p = -1;
+    for (int i = 0; i < 8; i++) {
+      if (signalStrength >= patternThresholds[i]) p = i;
+    }
+    if (p >= 0) {
+      Serial.println(p);
+    } else {
+      Serial.println("None");
+    }
+    lastDisplay = millis();
+  }
+}
+
+// Band-Pass Butterworth IIR digital filter
+// Sampling rate: 256.0 Hz, frequency: [0.5, 29.5] Hz
+float EEGFilter(float input) {
+    float output = input;
+    {
+        static float z1, z2;
+        float x = output - -0.95391350*z1 - 0.25311356*z2;
+        output = 0.00735282*x + 0.01470564*z1 + 0.00735282*z2;
+        z2 = z1;
+        z1 = x;
+    }
+    {
+        static float z1, z2;
+        float x = output - -1.20596630*z1 - 0.60558332*z2;
+        output = 1.00000000*x + 2.00000000*z1 + 1.00000000*z2;
+        z2 = z1;
+        z1 = x;
+    }
+    {
+        static float z1, z2;
+        float x = output - -1.97690645*z1 - 0.97706395*z2;
+        output = 1.00000000*x + -2.00000000*z1 + 1.00000000*z2;
+        z2 = z1;
+        z1 = x;
+    }
+    {
+        static float z1, z2;
+        float x = output - -1.99071687*z1 - 0.99086813*z2;
+        output = 1.00000000*x + -2.00000000*z1 + 1.00000000*z2;
+        z2 = z1;
+        z1 = x;
+    }
+    return output;
+}

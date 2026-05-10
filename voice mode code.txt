@@ -1,0 +1,404 @@
+/******************************************************************************
+  * @file    neurolimb_voice_control.ino
+  * @brief   Voice Control for NeuroLimb - 7 Commands with LCD
+  ******************************************************************************
+  */
+  
+#include <SoftwareSerial.h>
+#include "VoiceRecognitionV3.h"
+#include <Servo.h>
+#include <LiquidCrystal.h>
+
+/**        
+  Connection
+  Arduino    VoiceRecognitionModule
+   2   ------->     TX
+   3   ------->     RX
+*/
+VR myVR(2,3);    // 2:RX 3:TX
+
+// LCD Connections
+LiquidCrystal lcd(9, 10, 5, 6, 7, 8); // RS=9, E=10, D4=5, D5=6, D6=7, D7=8
+
+uint8_t records[7]; // save record
+uint8_t buf[64];
+
+// Servo objects - KEEPING ORIGINAL PINS
+Servo thumb, index, middle, ring, pinky;
+
+// Servo pins - UNCHANGED
+#define THUMB_PIN      4
+#define INDEX_PIN      11  
+#define MIDDLE_PIN     12
+#define RING_PIN       A0
+#define PINKY_PIN      A1
+
+// Servo positions - CORRECTED FOR ALL FINGERS
+#define THUMB_OPEN     90    // Thumb opens to 90
+#define THUMB_CLOSED   0     // Thumb closes to 0
+#define INDEX_OPEN     180   // Index opens to 180
+#define INDEX_CLOSED   0     // Index closes to 0
+#define MIDDLE_OPEN    0     // Middle opens to 0 (REVERSED)
+#define MIDDLE_CLOSED  180   // Middle closes to 180 (REVERSED)
+#define RING_OPEN      180     // Ring opens to 0 (REVERSED)
+#define RING_CLOSED    0   // Ring closes to 180 (REVERSED)
+#define PINKY_OPEN     180   // Pinky opens to 180
+#define PINKY_CLOSED   0     // Pinky closes to 0
+
+// 7 Commands for NeuroLimb
+#define HAND_TOGGLE    0  // Toggles open/close all fingers
+#define CHANGE_MODE    1  // Cycles through modes
+#define THUMB_FINGER   2
+#define INDEX_FINGER   3  
+#define MIDDLE_FINGER  4
+#define RING_FINGER    5
+#define PINKY_FINGER   6
+
+// Mode system
+int currentMode = 0; // 0=Voice, 1=Gesture, 2=Gyro, 3=Mind
+String modeNames[] = {"VOICE", "GESTURE", "GYRO", "MIND"};
+bool handOpen = false; // Tracks hand state
+
+void setup()
+{
+  /** initialize */
+  myVR.begin(9600);
+  
+  Serial.begin(115200);
+  
+  // Initialize LCD
+  lcd.begin(16, 2);
+  lcd.print("NeuroLimb Ready");
+  lcd.setCursor(0, 1);
+  lcd.print("Mode: VOICE");
+  
+  Serial.println("NeuroLimb Voice Recognition V3 Module");
+  Serial.println("7 Commands: HandToggle, ChangeMode, Thumb, Index, Middle, Ring, Pinky");
+  
+  // Initialize servos - CORRECT ALIGNMENT
+  initializeServos();
+    
+  if(myVR.clear() == 0){
+    Serial.println("Recognizer cleared.");
+    lcd.clear();
+    lcd.print("Module Cleared");
+    lcd.setCursor(0, 1);
+    lcd.print("Mode: VOICE");
+    delay(1000);
+  }else{
+    Serial.println("Voice module not found!");
+    lcd.clear();
+    lcd.print("Module Error!");
+    while(1);
+  }
+  
+  // Load all 7 commands
+  loadAllCommands();
+  
+  lcd.clear();
+ lcd.print("Hand: OPEN");
+  lcd.setCursor(0, 1);
+  lcd.print("Mode: VOICE");
+  Serial.println("All commands loaded. NeuroLimb Ready!");
+}
+
+void initializeServos()
+{
+  thumb.attach(THUMB_PIN);
+  index.attach(INDEX_PIN);
+  middle.attach(MIDDLE_PIN);
+  ring.attach(RING_PIN);
+  pinky.attach(PINKY_PIN);
+  
+  // Start with ALL FINGERS OPEN TOGETHER - CORRECT ALIGNMENT
+  openAllFingers();
+  handOpen = true;
+  
+  Serial.println("Servos initialized - All fingers OPEN");
+}
+
+void loadAllCommands()
+{
+  // Load all 7 commands
+  for(int i=0; i<7; i++){
+    if(myVR.load((uint8_t)i) >= 0){
+      Serial.print("Command ");
+      Serial.print(i);
+      Serial.println(" loaded - SAY COMMAND NOW");
+      lcd.clear();
+      lcd.print("Train CMD ");
+      lcd.print(i);
+      lcd.setCursor(0, 1);
+      lcd.print("Speak Now...");
+      delay(4000); // Time to speak each command
+    }
+  }
+  Serial.println("All 7 commands loaded successfully!");
+}
+
+void loop()
+{
+  int ret;
+  ret = myVR.recognize(buf, 50);
+  if(ret>0){
+    processCommand(buf[1]);
+    printVR(buf);
+  }
+  
+  // Mode-specific operations
+  runModeOperations();
+}
+
+void processCommand(uint8_t cmd)
+{
+  // CHANGE MODE command works in ALL modes
+  if(cmd == CHANGE_MODE) {
+    changeMode();
+    return;
+  }
+  
+  // Other commands only work in VOICE mode
+  if(currentMode != 0) {
+    Serial.println("Command ignored - Switch to VOICE mode");
+    lcd.clear();
+    lcd.print("Switch to VOICE");
+    lcd.setCursor(0, 1);
+    lcd.print("for commands");
+    delay(2000);
+    updateDisplay();
+    return;
+  }
+  
+  // Process commands only in VOICE mode
+  switch(cmd){
+    case HAND_TOGGLE:
+      /** Toggle hand open/close */
+      toggleHand();
+      break;
+    case THUMB_FINGER:
+      /** Toggle thumb finger */
+      toggleFinger(1);
+      Serial.println("Thumb toggled - VOICE MODE");
+      break;
+    case INDEX_FINGER:
+      /** Toggle index finger */
+      toggleFinger(2);
+      Serial.println("Index toggled - VOICE MODE");
+      break;
+    case MIDDLE_FINGER:
+      /** Toggle middle finger */
+      toggleFinger(3);
+      Serial.println("Middle toggled - VOICE MODE");
+      break;
+    case RING_FINGER:
+      /** Toggle ring finger */
+      toggleFinger(4);
+      Serial.println("Ring toggled - VOICE MODE");
+      break;
+    case PINKY_FINGER:
+      /** Toggle pinky finger */
+      toggleFinger(5);
+      Serial.println("Pinky toggled - VOICE MODE");
+      break;
+    default:
+      Serial.println("Command not recognized");
+      break;
+  }
+}
+
+void runModeOperations() {
+  switch(currentMode) {
+    case 0: // VOICE MODE
+      // Voice commands are handled in processCommand()
+      break;
+      
+    case 1: // GESTURE MODE
+      // Add your gesture sensor operations here
+      // Example: readGestureSensor();
+      break;
+      
+    case 2: // GYRO MODE
+      // Add your gyro sensor operations here
+      // Example: readGyroSensor();
+      break;
+      
+    case 3: // MIND MODE
+      // Add your mind control operations here
+      // Example: readMindSensor();
+      break;
+  }
+}
+
+void toggleHand() {
+  if(handOpen) {
+    // Currently open, so close it - ALL FINGERS CLOSE TOGETHER
+    closeAllFingers();
+    handOpen = false;
+    Serial.println(">>> HAND CLOSED - All fingers closed together");
+  } else {
+    // Currently closed, so open it - ALL FINGERS OPEN TOGETHER
+    openAllFingers();
+    handOpen = true;
+    Serial.println(">>> HAND OPENED - All fingers opened together");
+  }
+  updateDisplay();
+}
+
+void changeMode() {
+  currentMode = (currentMode + 1) % 4; // Cycle through 0,1,2,3
+  
+  Serial.println("=================================");
+  Serial.print(">>> MODE CHANGED TO: ");
+  Serial.println(modeNames[currentMode]);
+  Serial.println("=================================");
+  
+  // Mode-specific initialization
+  switch(currentMode) {
+    case 0: 
+      initializeVoiceMode();
+      break;
+    case 1:
+      initializeGestureMode();
+      break;
+    case 2:
+      initializeGyroMode();
+      break;
+    case 3:
+      initializeMindMode();
+      break;
+  }
+  
+  updateDisplay();
+  
+  // Visual feedback with built-in LED
+  blinkLED(currentMode + 1);
+}
+
+void initializeVoiceMode() {
+  Serial.println("Voice Mode: Finger commands enabled");
+  // Voice mode doesn't need special initialization
+}
+
+void initializeGestureMode() {
+  Serial.println("Gesture Mode: Gesture control active");
+  // Initialize gesture sensor here
+  // setupGestureSensor();
+}
+
+void initializeGyroMode() {
+  Serial.println("Gyro Mode: Motion control active");
+  // Initialize gyro sensor here
+  // setupGyroSensor();
+}
+
+void initializeMindMode() {
+  Serial.println("Mind Mode: Brain control active");
+  // Initialize mind control sensor here
+  // setupMindSensor();
+}
+
+void updateDisplay() {
+  lcd.clear();
+  if(handOpen) {
+    lcd.print("Hand: OPEN");
+  } else {
+    lcd.print("Hand: CLOSED");
+  }
+  lcd.setCursor(0, 1);
+  lcd.print("Mode: ");
+  lcd.print(modeNames[currentMode]);
+}
+
+void blinkLED(int times) {
+  pinMode(LED_BUILTIN, OUTPUT);
+  for(int i=0; i<times; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(200);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(200);
+  }
+}
+
+void toggleFinger(int finger)
+{
+  switch(finger) {
+    case 1: // Thumb
+      if(thumb.read() == THUMB_OPEN) {
+        thumb.write(THUMB_CLOSED);
+        Serial.println("Thumb CLOSED");
+      } else {
+        thumb.write(THUMB_OPEN);
+        Serial.println("Thumb OPENED");
+      }
+      break;
+    case 2: // Index
+      if(index.read() == INDEX_OPEN) {
+        index.write(INDEX_CLOSED);
+        Serial.println("Index CLOSED");
+      } else {
+        index.write(INDEX_OPEN);
+        Serial.println("Index OPENED");
+      }
+      break;
+    case 3: // Middle - REVERSED LOGIC
+      if(middle.read() == MIDDLE_OPEN) {
+        middle.write(MIDDLE_CLOSED);
+        Serial.println("Middle CLOSED");
+      } else {
+        middle.write(MIDDLE_OPEN);
+        Serial.println("Middle OPENED");
+      }
+      break;
+    case 4: // Ring - REVERSED LOGIC
+      if(ring.read() == RING_OPEN) {
+        ring.write(RING_CLOSED);
+        Serial.println("Ring CLOSED");
+      } else {
+        ring.write(RING_OPEN);
+        Serial.println("Ring OPENED");
+      }
+      break;
+    case 5: // Pinky
+      if(pinky.read() == PINKY_OPEN) {
+        pinky.write(PINKY_CLOSED);
+        Serial.println("Pinky CLOSED");
+      } else {
+        pinky.write(PINKY_OPEN);
+        Serial.println("Pinky OPENED");
+      }
+      break;
+  }
+  delay(300); // Smooth movement
+}
+
+void openAllFingers()
+{
+  // ALL FINGERS OPEN TOGETHER - with correct directions
+  thumb.write(THUMB_OPEN);      // Opens to 90
+  index.write(INDEX_OPEN);      // Opens to 180
+  middle.write(MIDDLE_OPEN);    // Opens to 0 (reversed)
+  ring.write(RING_OPEN);        // Opens to 0 (reversed)
+  pinky.write(PINKY_OPEN);      // Opens to 180
+  delay(500);
+  Serial.println("All fingers opened together");
+}
+
+void closeAllFingers()
+{
+  // ALL FINGERS CLOSE TOGETHER - with correct directions
+  thumb.write(THUMB_CLOSED);    // Closes to 0
+  index.write(INDEX_CLOSED);    // Closes to 0
+  middle.write(MIDDLE_CLOSED);  // Closes to 180 (reversed)
+  ring.write(RING_CLOSED);      // Closes to 180 (reversed)
+  pinky.write(PINKY_CLOSED);    // Closes to 0
+  delay(500);
+  Serial.println("All fingers closed together");
+}
+
+void printVR(uint8_t *buf)
+{
+  Serial.print("VR Index: ");
+  Serial.print(buf[2]);
+  Serial.print(" | Command: ");
+  Serial.println(buf[1]);
+}

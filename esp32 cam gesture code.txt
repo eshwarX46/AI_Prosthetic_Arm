@@ -1,0 +1,276 @@
+/* ============================================
+   ESP32-CAM Hand Gesture Recognition
+   Sends commands to Arduino Nano via Serial
+   ============================================ */
+
+#include <esp_camera.h>
+#include "edge-impulse-sdk/dsp/image/image.hpp"
+
+// ========== CAMERA MODEL SELECTION ==========
+#define CAMERA_MODEL_ESP_EYE  // Change this based on your camera model
+
+#ifdef CAMERA_MODEL_ESP_EYE
+#define PWDN_GPIO_NUM    -1
+#define RESET_GPIO_NUM   -1
+#define XCLK_GPIO_NUM    4
+#define SIOD_GPIO_NUM    18
+#define SIOC_GPIO_NUM    23
+
+#define Y9_GPIO_NUM      36
+#define Y8_GPIO_NUM      37
+#define Y7_GPIO_NUM      38
+#define Y6_GPIO_NUM      39
+#define Y5_GPIO_NUM      35
+#define Y4_GPIO_NUM      14
+#define Y3_GPIO_NUM      13
+#define Y2_GPIO_NUM      34
+#define VSYNC_GPIO_NUM   5
+#define HREF_GPIO_NUM    27
+#define PCLK_GPIO_NUM    25
+#endif
+
+// ========== CAMERA CONFIGURATION ==========
+static camera_config_t camera_config = {
+    .pin_pwdn = PWDN_GPIO_NUM,
+    .pin_reset = RESET_GPIO_NUM,
+    .pin_xclk = XCLK_GPIO_NUM,
+    .pin_sscb_sda = SIOD_GPIO_NUM,
+    .pin_sscb_scl = SIOC_GPIO_NUM,
+    .pin_d7 = Y9_GPIO_NUM,
+    .pin_d6 = Y8_GPIO_NUM,
+    .pin_d5 = Y7_GPIO_NUM,
+    .pin_d4 = Y6_GPIO_NUM,
+    .pin_d3 = Y5_GPIO_NUM,
+    .pin_d2 = Y4_GPIO_NUM,
+    .pin_d1 = Y3_GPIO_NUM,
+    .pin_d0 = Y2_GPIO_NUM,
+    .pin_vsync = VSYNC_GPIO_NUM,
+    .pin_href = HREF_GPIO_NUM,
+    .pin_pclk = PCLK_GPIO_NUM,
+    .xclk_freq_hz = 20000000,
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+    .pixel_format = PIXFORMAT_JPEG,
+    .frame_size = FRAMESIZE_QVGA,
+    .jpeg_quality = 12,
+    .fb_count = 1,
+    .fb_location = CAMERA_FB_IN_PSRAM,
+    .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+};
+
+// ========== GESTURE COMMANDS FOR ARDUINO NANO ==========
+// These match your Nano's gestureIndex values
+#define CMD_GESTURE_0   "G0"   // Thumb
+#define CMD_GESTURE_1   "G1"   // Index  
+#define CMD_GESTURE_2   "G2"   // Middle
+#define CMD_GESTURE_3   "G3"   // Ring
+#define CMD_GESTURE_4   "G4"   // Pinky
+#define CMD_GESTURE_5   "G5"   // All fingers
+#define CMD_MODE_CHANGE "MODE" // Change mode
+
+// ========== VARIABLES ==========
+static bool is_initialised = false;
+uint8_t *snapshot_buf;
+
+// Image dimensions
+#define EI_CAMERA_RAW_FRAME_BUFFER_COLS   320
+#define EI_CAMERA_RAW_FRAME_BUFFER_ROWS   240
+#define EI_CAMERA_FRAME_BYTE_SIZE         3
+
+// Gesture detection
+unsigned long lastGestureTime = 0;
+#define GESTURE_COOLDOWN 2000  // 2 seconds between gestures
+
+// ========== SEND COMMAND TO ARDUINO NANO ==========
+void sendToNano(String command) {
+    Serial.println(command);
+    Serial.flush();
+    Serial.print("📤 Sent to Nano: ");
+    Serial.println(command);
+}
+
+// ========== SIMULATED GESTURE RECOGNITION ==========
+// Since you don't have a trained Edge Impulse model yet,
+// this function SIMULATES gesture recognition.
+// Replace this with your actual AI model later.
+
+String detectGestureByImage() {
+    // ================================================
+    // METHOD 1: SIMULATED GESTURE DETECTION
+    // Replace this with your actual Edge Impulse model
+    // ================================================
+    
+    // For demo, cycle through gestures
+    static int gestureCounter = 0;
+    static unsigned long lastChange = 0;
+    
+    if (millis() - lastChange > 3000) {
+        gestureCounter = (gestureCounter + 1) % 6;
+        lastChange = millis();
+    }
+    
+    switch(gestureCounter) {
+        case 0: return "THUMB";
+        case 1: return "INDEX";
+        case 2: return "MIDDLE";
+        case 3: return "RING";
+        case 4: return "PINKY";
+        case 5: return "ALL";
+        default: return "NONE";
+    }
+    
+    /* ================================================
+    // METHOD 2: ACTUAL EDGE IMPULSE MODEL (UNCOMMENT WHEN READY)
+    // You need to:
+    // 1. Train a model on Edge Impulse
+    // 2. Download Arduino library
+    // 3. Include it in your project
+    
+    #include <your_gesture_model_inferencing.h>
+    
+    // Run actual inference
+    ei_impulse_result_t result = {0};
+    // ... run classifier ...
+    // return detected label
+    ================================================ */
+}
+
+// ========== CAPTURE IMAGE FROM CAMERA ==========
+bool captureImage() {
+    if (!is_initialised) {
+        Serial.println("❌ Camera not initialized!");
+        return false;
+    }
+    
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("❌ Camera capture failed!");
+        return false;
+    }
+    
+    // Convert JPEG to RGB888
+    bool converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, snapshot_buf);
+    esp_camera_fb_return(fb);
+    
+    if (!converted) {
+        Serial.println("❌ Image conversion failed!");
+        return false;
+    }
+    
+    return true;
+}
+
+// ========== PROCESS GESTURE AND SEND TO NANO ==========
+void processAndSendGesture() {
+    // Capture image
+    if (!captureImage()) {
+        return;
+    }
+    
+    // Detect gesture from image
+    String gesture = detectGestureByImage();
+    
+    // Check cooldown
+    if (millis() - lastGestureTime < GESTURE_COOLDOWN) {
+        return;
+    }
+    
+    // Send command based on detected gesture
+    if (gesture == "THUMB") {
+        sendToNano(CMD_GESTURE_0);
+        lastGestureTime = millis();
+    }
+    else if (gesture == "INDEX") {
+        sendToNano(CMD_GESTURE_1);
+        lastGestureTime = millis();
+    }
+    else if (gesture == "MIDDLE") {
+        sendToNano(CMD_GESTURE_2);
+        lastGestureTime = millis();
+    }
+    else if (gesture == "RING") {
+        sendToNano(CMD_GESTURE_3);
+        lastGestureTime = millis();
+    }
+    else if (gesture == "PINKY") {
+        sendToNano(CMD_GESTURE_4);
+        lastGestureTime = millis();
+    }
+    else if (gesture == "ALL") {
+        sendToNano(CMD_GESTURE_5);
+        lastGestureTime = millis();
+    }
+}
+
+// ========== CAMERA INITIALIZATION ==========
+bool initCamera() {
+    if (is_initialised) return true;
+    
+    esp_err_t err = esp_camera_init(&camera_config);
+    if (err != ESP_OK) {
+        Serial.printf("❌ Camera init failed: 0x%x\n", err);
+        return false;
+    }
+    
+    sensor_t *s = esp_camera_sensor_get();
+    if (s->id.PID == OV3660_PID) {
+        s->set_vflip(s, 1);
+        s->set_brightness(s, 1);
+        s->set_saturation(s, 0);
+    }
+    
+#if defined(CAMERA_MODEL_ESP_EYE)
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
+    s->set_awb_gain(s, 1);
+#endif
+    
+    is_initialised = true;
+    Serial.println("✅ Camera initialized!");
+    return true;
+}
+
+// ========== SETUP ==========
+void setup() {
+    Serial.begin(115200);  // Communication with Arduino Nano
+    
+    delay(1000);
+    Serial.println("==========================================");
+    Serial.println("   🤚 ESP32-CAM GESTURE RECOGNITION");
+    Serial.println("==========================================");
+    Serial.println("Sending commands to Arduino Nano via Serial");
+    Serial.println("");
+    
+    // Allocate snapshot buffer
+    snapshot_buf = (uint8_t*)malloc(EI_CAMERA_RAW_FRAME_BUFFER_COLS * 
+                                     EI_CAMERA_RAW_FRAME_BUFFER_ROWS * 
+                                     EI_CAMERA_FRAME_BYTE_SIZE);
+    
+    if (snapshot_buf == nullptr) {
+        Serial.println("❌ Failed to allocate memory!");
+        return;
+    }
+    
+    // Initialize camera
+    if (!initCamera()) {
+        Serial.println("❌ Camera failed! Check connections.");
+        return;
+    }
+    
+    Serial.println("🎯 Ready! Detecting gestures...");
+    Serial.println("==========================================");
+    delay(2000);
+}
+
+// ========== MAIN LOOP ==========
+void loop() {
+    static unsigned long lastProcessTime = 0;
+    
+    // Run gesture detection every 500ms
+    if (millis() - lastProcessTime > 500) {
+        processAndSendGesture();
+        lastProcessTime = millis();
+    }
+    
+    delay(50);
+}

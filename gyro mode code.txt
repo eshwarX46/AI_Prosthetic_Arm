@@ -1,0 +1,346 @@
+
+   @file    neurolimb_elbow_control_extended.ino
+   @brief   NeuroLimb Elbow Control - Extended Movement Range
+  
+  
+  
+#include Wire.h
+#include Servo.h
+#include LiquidCrystal.h
+
+ LCD Connections
+LiquidCrystal lcd(9, 10, 5, 6, 7, 8);  RS=9, E=10, D4=5, D5=6, D6=7, D7=8
+
+ Servo objects
+Servo elbowUD, elbowLR;
+
+ Servo pins
+#define ELBOW_UD_PIN   A2
+#define ELBOW_LR_PIN   A3
+
+ Servo positions - INCREASED MOVEMENT RANGE
+#define ELBOW_CENTER   90
+#define ELBOW_MOVE_RANGE 60   Increased from 40 to 60 for more movement
+
+ ADXL345 addresses
+#define ADXL345_ADDRESS_1 0x53
+#define ADXL345_ADDRESS_2 0x1D
+byte adxlAddress;
+
+ Variables
+int16_t x, y, z;
+float xg, yg, zg;
+float x_offset = 0, y_offset = 0, z_offset = 0;
+
+ Movement thresholds
+#define TILT_THRESHOLD 0.5
+#define DEAD_ZONE 0.2
+
+ Control variables
+String currentMovement = CENTER;
+String lastMovement = CENTER;
+bool movementLock = false;
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println(NeuroLimb Elbow Control - Extended Movement Range);
+  
+   Initialize LCD
+  lcd.begin(16, 2);
+  lcd.print(NeuroLimb Elbow);
+  lcd.setCursor(0, 1);
+  lcd.print(Extended Range);
+  
+   Initialize servos
+  initializeServos();
+  
+   Find and initialize ADXL345
+  if (!initializeADXL345()) {
+    Serial.println(ADXL345 initialization failed!);
+    lcd.clear();
+    lcd.print(GYRO NOT FOUND);
+    lcd.setCursor(0, 1);
+    lcd.print(Check Wiring);
+    while(1);
+  }
+  
+   Improved calibration
+  calibrateADXL345();
+  
+   Update display
+  updateDisplay(READY, CENTER);
+  
+  Serial.println(System ready!);
+  Serial.println(Extended movement range activated!);
+  Serial.println(Servo movement 30° to 150° (120° total range));
+  Serial.println(Tilt directions);
+  Serial.println(Forward = DOWN, Backward = UP);
+  Serial.println(Left = LEFT, Right = RIGHT);
+}
+
+void initializeServos() {
+  elbowUD.attach(ELBOW_UD_PIN);
+  elbowLR.attach(ELBOW_LR_PIN);
+  elbowUD.write(ELBOW_CENTER);
+  elbowLR.write(ELBOW_CENTER);
+  Serial.println(Servos initialized - Extended Range);
+  Serial.print(Movement range );
+  Serial.print(ELBOW_CENTER - ELBOW_MOVE_RANGE);
+  Serial.print(° to );
+  Serial.print(ELBOW_CENTER + ELBOW_MOVE_RANGE);
+  Serial.println(°);
+}
+
+bool initializeADXL345() {
+  Serial.println(Searching for ADXL345...);
+  
+  Wire.begin();
+  delay(100);
+  
+  if (testAddress(ADXL345_ADDRESS_1)) {
+    adxlAddress = ADXL345_ADDRESS_1;
+    Serial.println(ADXL345 found at 0x53);
+  } else if (testAddress(ADXL345_ADDRESS_2)) {
+    adxlAddress = ADXL345_ADDRESS_2;
+    Serial.println(ADXL345 found at 0x1D);
+  } else {
+    Serial.println(ERROR ADXL345 not found!);
+    return false;
+  }
+  
+  byte deviceId = readRegister(adxlAddress, 0x00);
+  Serial.print(Device ID 0x);
+  Serial.println(deviceId, HEX);
+  
+  if (deviceId != 0xE5) {
+    Serial.println(ERROR Wrong device ID!);
+    return false;
+  }
+  
+   Better initialization sequence
+  writeRegister(adxlAddress, 0x2D, 0x00);  First reset
+  delay(10);
+  writeRegister(adxlAddress, 0x2D, 0x08);  Measure mode
+  writeRegister(adxlAddress, 0x31, 0x0B);  +- 16g, full resolution
+  
+  Serial.println(ADXL345 initialized successfully!);
+  return true;
+}
+
+bool testAddress(byte address) {
+  Wire.beginTransmission(address);
+  return (Wire.endTransmission() == 0);
+}
+
+byte readRegister(byte address, byte reg) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.endTransmission();
+  
+  Wire.requestFrom(address, (byte)1);
+  return Wire.read();
+}
+
+void writeRegister(byte address, byte reg, byte value) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission();
+}
+
+void readAccelerometer() {
+  Wire.beginTransmission(adxlAddress);
+  Wire.write(0x32);
+  Wire.endTransmission();
+  
+  Wire.requestFrom(adxlAddress, (byte)6);
+  byte bytes[6];
+  for (int i = 0; i  6; i++) {
+    bytes[i] = Wire.read();
+  }
+  
+   Combine bytes with proper sign extension
+  x = (int16_t)((bytes[1]  8)  bytes[0]);
+  y = (int16_t)((bytes[3]  8)  bytes[2]);
+  z = (int16_t)((bytes[5]  8)  bytes[4]);
+  
+   Convert to G with proper scaling for +-16g
+  xg = (x  256.0) - x_offset;
+  yg = (y  256.0) - y_offset;
+  zg = (z  256.0) - z_offset;
+}
+
+void calibrateADXL345() {
+  Serial.println(CALIBRATION Place sensor FLAT on table);
+  Serial.println(Z-axis should point UP, XY should be horizontal);
+  lcd.clear();
+  lcd.print(CALIBRATION);
+  lcd.setCursor(0, 1);
+  lcd.print(Place FLAT...);
+  delay(3000);
+  
+  float sumX = 0, sumY = 0, sumZ = 0;
+  int samples = 200;
+  
+  Serial.println(Calibrating... DO NOT MOVE!);
+  
+  for (int i = 0; i  samples; i++) {
+    readAccelerometer();
+    sumX += xg;
+    sumY += yg;
+    sumZ += zg;
+    
+     Show progress
+    if (i % 40 == 0) {
+      lcd.clear();
+      lcd.print(Calibrating...);
+      lcd.setCursor(0, 1);
+      lcd.print(i  2);
+      lcd.print(%);
+    }
+    delay(20);
+  }
+  
+   Calculate offsets - when flat X=0, Y=0, Z=+1g
+  x_offset = sumX  samples;
+  y_offset = sumY  samples;
+  z_offset = (sumZ  samples) - 1.0;
+  
+  Serial.println(Calibration complete!);
+  
+  lcd.clear();
+  lcd.print(Calibration OK!);
+  lcd.setCursor(0, 1);
+  lcd.print(Extended Range);
+  delay(1000);
+}
+
+void loop() {
+  readAccelerometer();
+  controlElbow();
+  printDebugInfo();
+  delay(50);
+}
+
+void controlElbow() {
+  int udPos = ELBOW_CENTER;
+  int lrPos = ELBOW_CENTER;
+  currentMovement = CENTER;
+  
+   Calculate tilt angles in degrees for better understanding
+  float tiltX = atan2(xg, sqrt(ygyg + zgzg))  180.0  PI;
+  float tiltY = atan2(yg, sqrt(xgxg + zgzg))  180.0  PI;
+  
+   Check if centered using tilt angles
+  bool isCentered = (abs(tiltX)  10 && abs(tiltY)  10);
+  
+  if (isCentered) {
+     CENTER position
+    udPos = ELBOW_CENTER;
+    lrPos = ELBOW_CENTER;
+    currentMovement = CENTER;
+    movementLock = false;
+  } else {
+     Use tilt angles for more intuitive control
+    if (!movementLock) {
+       Decide which axis to control based on tilt angles
+      if (abs(tiltX)  15 && abs(tiltX)  abs(tiltY)) {
+         X-axis tilt dominant - LEFTRIGHT
+        if (tiltX  0) {
+          lrPos = ELBOW_CENTER + ELBOW_MOVE_RANGE;  RIGHT
+          currentMovement = RIGHT;
+        } else {
+          lrPos = ELBOW_CENTER - ELBOW_MOVE_RANGE;  LEFT
+          currentMovement = LEFT;
+        }
+        udPos = ELBOW_CENTER;
+        movementLock = true;
+      } else if (abs(tiltY)  15 && abs(tiltY)  abs(tiltX)) {
+         Y-axis tilt dominant - UPDOWN
+        if (tiltY  0) {
+          udPos = ELBOW_CENTER - ELBOW_MOVE_RANGE;  DOWN (forward tilt)
+          currentMovement = DOWN;
+        } else {
+          udPos = ELBOW_CENTER + ELBOW_MOVE_RANGE;  UP (backward tilt)
+          currentMovement = UP;
+        }
+        lrPos = ELBOW_CENTER;
+        movementLock = true;
+      }
+    } else {
+       Maintain locked movement
+      if (lastMovement == LEFT  lastMovement == RIGHT) {
+        lrPos = (lastMovement == LEFT)  ELBOW_CENTER - ELBOW_MOVE_RANGE  ELBOW_CENTER + ELBOW_MOVE_RANGE;
+        udPos = ELBOW_CENTER;
+        currentMovement = lastMovement;
+      } else if (lastMovement == UP  lastMovement == DOWN) {
+        udPos = (lastMovement == DOWN)  ELBOW_CENTER - ELBOW_MOVE_RANGE  ELBOW_CENTER + ELBOW_MOVE_RANGE;
+        lrPos = ELBOW_CENTER;
+        currentMovement = lastMovement;
+      }
+    }
+  }
+  
+   Move servos
+  elbowUD.write(udPos);
+  elbowLR.write(lrPos);
+  
+   Update display if movement changed
+  if (currentMovement != lastMovement) {
+    updateDisplay(MOVING, currentMovement);
+    lastMovement = currentMovement;
+  }
+}
+
+void updateDisplay(String status, String direction) {
+  lcd.clear();
+  lcd.print(EXTENDED RANGE);
+  lcd.setCursor(0, 1);
+  
+  if (direction == CENTER) {
+    lcd.print(CENTERED  READY);
+  } else if (direction == LEFT) {
+    lcd.print( LEFT ONLY);
+  } else if (direction == RIGHT) {
+    lcd.print(RIGHT  ONLY);
+  } else if (direction == UP) {
+    lcd.print(UP ^^^   ONLY);
+  } else if (direction == DOWN) {
+    lcd.print(DOWN vvv ONLY);
+  }
+}
+
+void printDebugInfo() {
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint  500) {
+     Calculate tilt angles for debug
+    float tiltX = atan2(xg, sqrt(ygyg + zgzg))  180.0  PI;
+    float tiltY = atan2(yg, sqrt(xgxg + zgzg))  180.0  PI;
+    
+    Serial.print(Raw G - X);
+    Serial.print(xg, 2);
+    Serial.print(g Y);
+    Serial.print(yg, 2);
+    Serial.print(g  );
+    
+    Serial.print(Tilt - X);
+    Serial.print(tiltX, 1);
+    Serial.print(° Y);
+    Serial.print(tiltY, 1);
+    Serial.print(°  );
+    
+    Serial.print(Move);
+    Serial.print(currentMovement);
+    Serial.print(  UD);
+    Serial.print(elbowUD.read());
+    Serial.print(° LR);
+    Serial.print(elbowLR.read());
+    Serial.print(°  Range);
+    Serial.print(ELBOW_CENTER - ELBOW_MOVE_RANGE);
+    Serial.print(-);
+    Serial.print(ELBOW_CENTER + ELBOW_MOVE_RANGE);
+    Serial.println(°);
+    
+    lastPrint = millis();
+  }
+}
