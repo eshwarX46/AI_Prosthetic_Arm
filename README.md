@@ -35,8 +35,7 @@ This project presents an intelligent prosthetic arm controlled using multiple in
 ---
 
 ## 📸 Project Image
-![Uploading img 1.jpg…]()
-
+<img width="3072" height="3072" alt="img 1" src="https://github.com/user-attachments/assets/02fd4c13-98ac-4a94-bfc9-945c01cf2f3a" />
 
 ---
 
