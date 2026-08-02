@@ -30,7 +30,12 @@ This project presents an intelligent prosthetic arm controlled using multiple in
 - EEG signals are used for basic control commands  
 - Voice commands trigger predefined actions  
 - Camera detects objects and assists control  
-- All inputs are processed and mapped to servo motor actions  
+- All inputs are processed and mapped to servo motor actions
+
+---
+
+## 📸 Project Image
+
 
 ---
 
