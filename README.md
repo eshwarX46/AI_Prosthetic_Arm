@@ -35,7 +35,7 @@ This project presents an intelligent prosthetic arm controlled using multiple in
 ---
 
 ## 📸 Project Image
-
+images/img 1.jpg
 
 ---
 
