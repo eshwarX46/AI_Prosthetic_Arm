@@ -1,68 +1,80 @@
-# 🤖 AI Powered Multi-Mode Controlled Prosthetic Arm
+# 🤖 AI-Powered Multi-Mode Controlled Prosthetic Arm
+
+**EEG · EMG · Voice Commands · Computer Vision**
+
+![Platform](https://img.shields.io/badge/Platform-Arduino%20%7C%20ESP32--CAM-blue)
+![Control](https://img.shields.io/badge/Control-Multi--Mode-orange)
+![Signals](https://img.shields.io/badge/Inputs-EEG%20%7C%20EMG-purple)
+![Application](https://img.shields.io/badge/Application-Assistive%20Robotics-success)
+
+---
 
 ## 📌 Overview
-This project presents an intelligent prosthetic arm controlled using multiple input methods including EEG (brain signals), EMG (muscle signals), voice commands, and computer vision. The system integrates embedded systems with AI to provide natural human-machine interaction.
 
----
+This project presents an intelligent prosthetic arm prototype controlled through multiple input methods, including **EEG (brain signals)**, **EMG (muscle signals)**, **voice commands**, and **computer vision**.
+
+The system combines embedded control with AI-assisted interaction to translate user inputs into servo-driven arm and finger movements.
 
 ## ✨ Features
-- 🧠 EEG-based control (mind signals)
+
+- 🧠 EEG-based control commands
 - 💪 EMG-based finger control
 - 🎤 Voice command control
-- 🎥 Vision-based object detection (ESP32-CAM)
-- 🔄 Multi-mode switching
+- 🎥 Vision-based object detection using ESP32-CAM
+- 🔄 Switching between multiple control modes
 - 🤖 Real-time servo movement
 
----
-
 ## 🛠️ Hardware Used
-- Arduino Uno / Nano  
-- ESP32-CAM  
-- BioAmp EXG Pills (EMG/EEG)  
-- Servo Motors  
-- Camera Module  
-- Microphone  
 
----
+| Component | Purpose |
+| --- | --- |
+| Arduino UNO / Nano | Embedded input processing and control |
+| ESP32-CAM | Camera-based processing |
+| BioAmp EXG Pills | EMG / EEG signal acquisition |
+| Servo motors | Arm and finger movement |
+| Camera module | Visual input |
+| Microphone | Voice input |
 
 ## ⚙️ Working Principle
-- EMG sensors detect muscle signals to control finger movement  
-- EEG signals are used for basic control commands  
-- Voice commands trigger predefined actions  
-- Camera detects objects and assists control  
-- All inputs are processed and mapped to servo motor actions
 
----
+| Control mode | Input | Function |
+| --- | --- | --- |
+| EMG | Muscle signals | Controls finger movement |
+| EEG | Brain signals | Provides basic control commands |
+| Voice | Spoken commands | Triggers predefined actions |
+| Vision | Camera input | Detects objects and assists control |
+
+The selected mode determines which input is processed. Recognized inputs are mapped to servo commands to perform the corresponding movement.
 
 ## 📸 Project Image
-<img width="3072" height="3072" alt="img 1" src="https://github.com/user-attachments/assets/02fd4c13-98ac-4a94-bfc9-945c01cf2f3a" />
 
----
+<img src="https://github.com/user-attachments/assets/02fd4c13-98ac-4a94-bfc9-945c01cf2f3a" alt="AI-powered multi-mode controlled prosthetic arm prototype" width="900" />
 
-## 🎥 Demo
-https://youtu.be/JNQdabV9ogY
----
+## 🎥 Demonstration Video
+
+[▶ Watch the prosthetic arm demonstration on YouTube](https://youtu.be/JNQdabV9ogY)
 
 ## 🚀 Applications
-- Assistive technology for disabled persons  
-- Human-machine interaction systems  
-- Robotics research  
 
----
+- Assistive technology research for people with disabilities
+- Human–machine interaction systems
+- Robotics research and education
 
 ## 🔮 Future Improvements
-- Better AI model accuracy  
-- Wireless wearable system  
-- Mobile app integration  
 
----
+- Improve AI model accuracy
+- Develop a wireless wearable interface
+- Integrate a mobile application
 
 ## 👤 Author
-Eshwar Prasad Y
+
+**Eshwar Prasad Y**
+
+## 📧 Contact
+
+- **Email:** [eshwargowda313@gmail.com](mailto:eshwargowda313@gmail.com)
+- **LinkedIn:** [Eshwar Prasad Y](https://www.linkedin.com/in/eshwar-prasad-y-a3043b370/)
 
 ---
-## 📧 CONTACT:
- Email: eshwargowda313@gmail.com
- 
- LinkedIn: linkedin.com/in/eshwar-prasad-y-a3043b370
----
+
+**Multi-Mode Control · Embedded Systems · Human–Machine Interaction · Assistive Robotics**
