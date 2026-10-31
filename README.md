@@ -40,7 +40,7 @@ This project presents an intelligent prosthetic arm controlled using multiple in
 ---
 
 ## 🎥 Demo
-https://youtu.be/p2e_8o5htJQ
+https://youtu.be/JNQdabV9ogY
 ---
 
 ## 🚀 Applications
